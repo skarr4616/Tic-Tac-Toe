@@ -8,7 +8,7 @@ export class Box extends Component {
 
     render() {
         const sym = ["0", "X"];
-        const value = this.props.value != null ? sym[this.props.value] : "";
+        const value = this.props.value != null ? sym[this.props.value - 1] : "";
 
         var style = "box";
 

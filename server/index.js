@@ -1,76 +1,111 @@
-const http = require("http");
-const express = require("express");
-const { Server } = require("socket.io");
-const cors = require("cors");
-const uuidv4 = require("uuid").v4;
+import http from "http";
+import path from "path";
+import express from "express";
+import { Server } from "socket.io";
+import cors from "cors";
+import { v4 } from "uuid";
 
-const { Queue } = require("./queue.js");
+import Queue from "./queue.js";
+import checkGameState from "./utils.js";
 
 const app = express();
-app.use(cors());
+app.use(express.static("client/build"));
+
+app.get("*", (req, res) => {
+    res.sendFile(path.resolve(__dirname, "client", "build", "index.html"));
+});
 
 const server = http.createServer(app);
 let waitingList = new Queue();
 let games = {};
+let players = {};
 
-const io = new Server(server, {
-    cors: {
-        origin: "http://localhost:3000",
-        methods: ["GET", "POST"],
-    },
-});
+const io = new Server(server);
 
 io.on("connection", (socket) => {
-    console.log(`User Connected: ${socket.id}`);
-
-    socket.on("send_message", (data) => {
-        console.log(data);
-        socket.broadcast.emit("receive_message", data);
+    console.log(`User connected: ${socket.id}`);
+    socket.on("disconnect", () => {
+        console.log(`User disconnected: ${socket.id}`);
     });
 
-    socket.on("play_game", (data) => {
-        console.log(`I am here ${socket.id}`);
-
-        if (waitingList.size() == 0) {
+    socket.on("join game", () => {
+        if (waitingList.size() === 0) {
             waitingList.push(socket.id);
         } else {
             const player1 = waitingList.pop();
             const player2 = socket.id;
 
-            const gameId = uuidv4();
+            const gameId = v4();
             games[gameId] = {
-                player0: player1,
-                player1: player2,
+                player1: player1,
+                player2: player2,
                 gameId: gameId,
                 gameState: Array(9).fill(null),
+                movesPlayed: 0,
             };
 
-            socket.to(player1).emit("got_player", {
+            players[player1] = {
+                gameId: gameId,
+                turn: 1,
+                opponent: player2,
+            };
+            players[player2] = {
+                gameId: gameId,
+                turn: 2,
+                opponent: player1,
+            };
+
+            socket.to(player1).emit("start game", {
                 gameId: gameId,
                 turn: 1,
             });
-
-            socket.emit("got_player", {
+            socket.emit("start game", {
                 gameId: gameId,
-                turn: 0,
+                turn: 2,
             });
+
+            console.log(`Game ${gameId} is ON!`);
         }
     });
 
-    socket.on("game_move", (data) => {
+    socket.on("move", (data) => {
+        const boxIdx = data.boxIdx;
         const gameId = data.gameId;
-        const idx = data.idx;
+        const opponent = players[socket.id].opponent;
 
-        const player0 = games[gameId].player0;
-        const player1 = games[gameId].player1;
-        const opponent = socket.id === player0 ? player1 : player0;
+        games[gameId].movesPlayed = games[gameId].movesPlayed + 1;
+        games[gameId].gameState[boxIdx] = players[socket.id].turn;
+        if (checkGameState(games[gameId].gameState)) {
+            console.log(
+                `Game ${gameId} was won by player ${players[socket.id].turn}`
+            );
 
-        games[gameId].gameState[idx] = socket.id === player0 ? 0 : 1;
-
-        socket.to(opponent).emit("make_move", { idx: data.idx });
+            socket.to(opponent).emit("end game", {
+                gameState: games[gameId].gameState,
+                verdict: "loser",
+            });
+            socket.emit("end game", {
+                gameState: games[gameId].gameState,
+                verdict: "winner",
+            });
+        } else if (games[gameId].movesPlayed === 9) {
+            console.log(`Game ${gameId} ended in a draw`);
+            socket.to(opponent).emit("end game", {
+                gameState: games[gameId].gameState,
+                verdict: "draw",
+            });
+            socket.emit("end game", {
+                gameState: games[gameId].gameState,
+                verdict: "draw",
+            });
+        } else {
+            socket
+                .to(opponent)
+                .emit("make move", { gameState: games[gameId].gameState });
+        }
     });
 });
 
 server.listen(8080, () => {
-    console.log("SERVER IS RUNNING");
+    console.log("server running at http://localhost:8080");
 });
